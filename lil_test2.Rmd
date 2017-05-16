@@ -1,0 +1,299 @@
+---
+title: 'Liligo Test 2: Paris, France Airbnb'
+author: "Robert Herczeg"
+date: '2017-05-14'
+output:
+  slidy_presentation:
+      font_adjustment: -2
+      footer: "Robert Herczeg"
+  css: style.css
+  widescreen: yes
+---
+
+```{r setup, include=FALSE, echo = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(prophet)
+library(data.table)
+library(htmltools)
+library(dygraphs)
+library(magrittr)
+library(dplyr)
+library(broom)
+library(tm)
+library(wordcloud)
+library(googleVis)
+library(ggplot2)
+
+listing_detailed <- fread("listings_detailed.csv")
+review_detailed <- read.csv("reviews_detailed.csv", sep = ",",
+                            quote = '"',
+                            colClasses = c("numeric", "numeric",
+                                           "Date", "numeric",
+                                           "character", "character"))
+review_detailed <- data.table(review_detailed)
+calendare_detailed <- fread("calendar_detailed.csv")
+
+
+# multiplot script was copied from:
+# http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots <- length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots / cols)),
+                    ncol = cols, nrow = ceiling(numPlots / cols))
+  }
+
+ if (numPlots == 1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+```
+
+## Data source
+
+Data was downloaded from [Inside Airbnb](http://insideairbnb.com/get-the-data.html). 3 files were downloaded:  
+
+* listings.csv.gz
+* reviews.csv.gz
+* calendar.csv.gz
+
+  
+Listings contains detailed data about the accommodations such as host name, price, different kinds of score etc.  
+  
+Reviews data includes the review, the date, the reviewer name etc.  
+  
+In the calendar data set, we can check the availabilty of given accommodation in a given day.
+
+## Dataset - basic info  
+
+- **48,306** hosts
+- **53,920** locations
+- **844,397** reviews
+- There are hosts since **2008** august.
+- Prices varies between 0 - 7790€. On average, an accommodation costs ~ **95€** (median - 759€).
+- Reviews varies between 0 - 5510. Usually ~ **340 character long** reviews are written (median - 260).
+
+## Room type
+  
+
+```{r room_type, echo = FALSE, warning = FALSE}
+tmp_room_type <- summary(as.factor(listing_detailed$room_type))
+tmp_room_type <- tmp_room_type %>% as.data.frame()
+colnames(tmp_room_type) <- "count"
+tmp_room_type$type <- as.factor(rownames(tmp_room_type))
+```
+  
+There are **56,535** locations and **  `r paste(round(tmp_room_type["Entire home/apt",1] / sum(tmp_room_type$count) * 100, 2), "%", sep = "")` ** of them are entire homes/apartments.  
+```{r room_type2, echo = FALSE, warning = FALSE}
+
+ggplot(data = tmp_room_type, aes(x = type, y = count,
+                                 fill = c("red", "green", "blue"))) +
+    geom_bar(colour = "black", stat = "identity") +
+    xlab("Room type") + ylab("Count") +
+    guides(fill = FALSE)
+
+```
+  
+`r paste(round(tmp_room_type["Private room",1] / sum(tmp_room_type$count) * 100, 2), "%", sep = "")` are Private rooms, while 
+`r paste(round(tmp_room_type["Shared room",1] / sum(tmp_room_type$count) * 100, 2), "%", sep = "")` are Shared rooms.
+
+## Room type - price (mean, median)
+  
+**Entire home/apt** are the **most expensive** compared to the other two types.
+```{r room_type3, echo = FALSE, warning = FALSE}
+listing_detailed$price2 <- as.numeric(gsub("\\$", "", listing_detailed$price))
+tmp_price_mean <- listing_detailed[, .(meanPrice = mean(price2, na.rm = TRUE)),
+                                   by = room_type]
+tmp_price_median <- listing_detailed[, .(medianPrice = median(price2,
+                                                              na.rm = TRUE)),
+                                     by = room_type]
+
+p_mean <- ggplot(data = tmp_price_mean,
+                 aes(x = room_type, y = meanPrice,
+                     fill = c("red", "green", "blue"))) +
+    geom_bar(colour = "black", stat = "identity") +
+    xlab("Room type - price (**mean**)") + ylab("$") +
+    guides(fill = FALSE)
+
+p_median <- ggplot(data = tmp_price_median,
+                   aes(x = room_type, y = medianPrice,
+                       fill = c("red", "green", "blue"))) +
+    geom_bar(colour = "black", stat = "identity") +
+    xlab("Room type - price (median)") + ylab("$") +
+    guides(fill = FALSE)
+multiplot(p_mean, p_median, cols = 2)
+```
+
+## Distribution of bedrooms
+  
+Most of the accommodations have **less than 2 bedrooms**. 
+```{r map, echo = FALSE}
+library(leaflet, quietly = TRUE)
+set.seed(16)
+leaflet_sample <- sample(1:dim(listing_detailed)[1], 3000)
+m <- leaflet() %>%
+     addTiles() %>%  # Add default OpenStreetMap map tiles
+     addCircleMarkers(data = listing_detailed[leaflet_sample],
+                      lng = listing_detailed$longitude[leaflet_sample],
+                      lat = listing_detailed$latitude[leaflet_sample],
+                      radius = 5, popup = ~htmlEscape(summary),
+                      color = ~ ifelse(bedrooms >= 3, "red",
+                                       ifelse(bedrooms >= 2, "blue", "yellow"))
+                      #clusterOptions = markerClusterOptions()
+                      )
+m
+```
+red >= 3; blue = 2; yellow < 2  
+
+## WordCloud
+
+```{r wordcloud, echo = FALSE, warning = FALSE}
+szoveg <- as.character(review_detailed$comments)
+szoveg <- tolower(szoveg)
+reuters <- VCorpus(VectorSource(szoveg[leaflet_sample]))
+reuters <- tm_map(reuters, removePunctuation)
+reuters <- tm_map(reuters, removeNumbers)
+reuters <- tm_map(reuters, removeWords, stopwords("SMART"))
+reuters <- tm_map(reuters, removeWords, stopwords("german"))
+reuters <- tm_map(reuters, removeWords, stopwords("french"))
+reuters <- tm_map(reuters, stripWhitespace)
+dtm <- DocumentTermMatrix(reuters)
+freqr <- colSums(as.matrix(dtm))
+
+# limit words by specifying min frequency
+wordcloud(names(freqr), freqr, min.freq = 80,
+          colors = brewer.pal(12, "Set3"), scale = c(4, .3))
+
+```
+  
+Usually, the most frequent words are **positive**. Based on 3000 random comments from reviews.
+
+## Review tendency over time
+
+```{r reviews_by_time, echo = FALSE, warning = FALSE}
+review_detailed$count <- 1
+tmp_rev <- review_detailed[, .(sum = sum(count)), by = date]
+tmp_rev$date <- as.Date(tmp_rev$date)
+
+dygraph(tmp_rev, main = "Number of reviews")  %>%
+  dyRangeSelector() %>%
+  dyAxis("y", label = "count") %>%
+  dyOptions(axisLineWidth = 1.5, fillGraph = TRUE, drawGrid = FALSE)
+
+```
+  
+The number of reviews is continuously **increasing** since the beginning.
+
+## Review prediction - 1
+
+The prediction shows a **growing tendency** which continues in 2018.
+```{r prophet_review, echo = FALSE, warning = FALSE}
+colnames(tmp_rev) <- c("ds", "y")
+invisible(capture.output(m <- prophet(tmp_rev)))
+future <- make_future_dataframe(m, periods = 365)
+forecast <- predict(m, future)
+plot(m, forecast, xlabel = "time (years)", ylabel = "number of reviews")
+```
+  
+Based on Facebook's prophet package.
+
+## Review prediction - 2
+
+Simplified trends with three differents resolutions. 
+```{r prophet_review2, echo = FALSE, warning = FALSE}
+prophet_plot_components(m, forecast, weekly_start = 1)
+```
+  
+**Monday** and **Sunday** are the most active days to write a review. In the yearly graph, there are two peaks one in July and one in October.
+These clearly indicates that people usually visits Paris in the middle of **summer** and at the begining of **autumn**.
+Based on Facebook's prophet package.
+
+## K-mean clustering
+
+**6** or **7** clusters were differentiated. Therefore, we can create at least 6 different segments.
+```{r kmean-cluster, echo = FALSE, warning = FALSE}
+tmp_review <- listing_detailed[, .(review_scores_cleanliness,
+review_scores_communication, review_scores_location,
+review_scores_value)]
+
+tmp_review <- na.omit(tmp_review)
+kclusts <- data.frame(k = 1:9) %>%
+  group_by(k) %>%
+  do(kclust = kmeans(tmp_review, .$k))
+
+clusterings <- kclusts %>%
+  group_by(k) %>%
+  do(glance(.$kclust[[1]]))
+ggplot(clusterings, aes(k, tot.withinss)) + geom_line() +
+  xlab("number of clusters (k)") + ylab("total within sum of squares")
+
+```
+  
+4 metrics were used: cleanliness, communication, location, value
+
+## Calendaer
+
+Two randomly choosed hosts from calendar data set and the visualization of their availability until May, 2018. 
+```{r calendar, echo = FALSE, warning = FALSE, results = "asis"}
+op <- options(gvis.plot.tag = "chart")
+cal_1_df <- calendare_detailed[listing_id == 18054785, ]
+cal_1_df$date2 <- as.Date(cal_1_df$date)
+cal_1_df$price2 <- as.numeric(gsub("\\$", "", cal_1_df$price))
+cal_1 <- gvisCalendar(cal_1_df, chartid = "gvis1",
+                    datevar = "date2",
+                    numvar = "price2",
+                    options = list(
+                      title = "Price",
+                      height = 320,
+                      calendar = "{yearLabel: { fontName: 'Times-Roman',
+                               fontSize: 32, color: '#1A8763', bold: true},
+                               cellSize: 10,
+                               cellColor: { stroke: 'red', strokeOpacity: 0.2 },
+                               focusedCellColor: {stroke:'red'}}")
+)
+
+cal_2_df <- calendare_detailed[listing_id == 5396, ]
+cal_2_df$date2 <- as.Date(cal_2_df$date)
+cal_2_df$price2 <- as.numeric(gsub("\\$", "", cal_2_df$price))
+cal_2 <- gvisCalendar(cal_2_df, chartid = "gvis2",
+                    datevar = "date2",
+                    numvar = "price2",
+                    options = list(
+                      title = "Price",
+                      height = 320,
+                      calendar = "{yearLabel: { fontName: 'Times-Roman',
+                               fontSize: 32, color: '#1A8763', bold: true},
+                               cellSize: 10,
+                               cellColor: { stroke: 'red', strokeOpacity: 0.2 },
+                               focusedCellColor: {stroke:'red'}}")
+)
+plot(gvisMerge(cal_1, cal_2, horizontal = FALSE))
+```
+
+## Thank you for your attention!
+  
