@@ -1,0 +1,1 @@
+install.packages(c("prophet", "data.table", "htmltools", "dygraphs", "magrittr", "dplyr", "broom", "tm", "wordcloud", "googleVis", "ggplot2"), dependencies = TRUE, repos = "http://cran.at.r-project.org")
