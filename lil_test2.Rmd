@@ -25,6 +25,8 @@ library(googleVis)
 library(ggplot2)
 
 listing_detailed <- fread("listings_detailed.csv")
+# there is a problem with fread, therefoe read.csv with colClasses was used
+# with colClasses it is faster to import
 review_detailed <- read.csv("reviews_detailed.csv", sep = ",",
                             quote = '"',
                             colClasses = c("numeric", "numeric",
@@ -173,16 +175,16 @@ red >= 3; blue = 2; yellow < 2
 ## WordCloud
 
 ```{r wordcloud, echo = FALSE, warning = FALSE}
-szoveg <- as.character(review_detailed$comments)
-szoveg <- tolower(szoveg)
-reuters <- VCorpus(VectorSource(szoveg[leaflet_sample]))
-reuters <- tm_map(reuters, removePunctuation)
-reuters <- tm_map(reuters, removeNumbers)
-reuters <- tm_map(reuters, removeWords, stopwords("SMART"))
-reuters <- tm_map(reuters, removeWords, stopwords("german"))
-reuters <- tm_map(reuters, removeWords, stopwords("french"))
-reuters <- tm_map(reuters, stripWhitespace)
-dtm <- DocumentTermMatrix(reuters)
+tmp_text <- as.character(review_detailed$comments)
+tmp_text <- tolower(tmp_text)
+tmp_text <- VCorpus(VectorSource(tmp_text[leaflet_sample]))
+tmp_text <- tm_map(tmp_text, removePunctuation)
+tmp_text <- tm_map(tmp_text, removeNumbers)
+tmp_text <- tm_map(tmp_text, removeWords, stopwords("SMART"))
+tmp_text <- tm_map(tmp_text, removeWords, stopwords("german"))
+tmp_text <- tm_map(tmp_text, removeWords, stopwords("french"))
+tmp_text <- tm_map(tmp_text, stripWhitespace)
+dtm <- DocumentTermMatrix(tmp_text)
 freqr <- colSums(as.matrix(dtm))
 
 # limit words by specifying min frequency
